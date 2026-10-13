@@ -23,7 +23,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive and running smoothly.")
 
     def log_message(self, format, *args):
-        return  # Pinapatay ang spammy console logs mula sa health check pings
+        return  # Pinapatay ang console logs mula sa health check pings
 
 def run_health_server():
     # Awtomatikong kukunin ang Port 10000 mula sa Render environment variables
@@ -246,7 +246,6 @@ async def message_handler(event):
             except Exception:
                 await event.respond(f"An unexpected error occurred during processing.\nError Details: {str(e)}")
         
-        fclose = True
         if os.path.exists(folder_name):
             shutil.rmtree(folder_name)
     
@@ -262,3 +261,4 @@ async def main():
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
+    loop.run_until_complete(main())
