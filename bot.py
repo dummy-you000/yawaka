@@ -17,8 +17,47 @@ asyncio.set_event_loop(loop)
 
 bot = TelegramClient('site_dumper_bot', API_ID, API_HASH, loop=loop)
 
-# Temporary storage state for users waiting to dump websites
 user_states = {}
+
+def get_dir_size(path):
+    """Kinukuha ang kabuuang sukat ng folder para sa live size progress tracking."""
+    total_size = 0
+    if os.path.exists(path):
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if os.path.exists(fp):
+                    total_size += os.path.getsize(fp)
+    return total_size
+
+async def track_progress(folder_name, status_msg):
+    """Hiwalay na background task na nagpapakita ng live download progress animation."""
+    dots = ["⏳", "⏳.", "⏳..", "⏳..."]
+    i = 0
+    while True:
+        await asyncio.sleep(3) # Nag-e-edit kada 3 segundo para maiwasan ang Telegram rate limit
+        if not os.path.exists(folder_name):
+            continue
+            
+        size_bytes = get_dir_size(folder_name)
+        size_kb = size_bytes / 1024
+        size_mb = size_kb / 1024
+        
+        # Gumagawa ng malinis at scannable na visual text asset
+        if size_mb > 1:
+            progress_text = f"Scraping front & backend assets... {size_mb:.2f} MB collected"
+        else:
+            progress_text = f"Scraping front & backend assets... {size_kb:.1f} KB collected"
+            
+        try:
+            await status_msg.edit(
+                f"**Dumping Website** {dots[i % 4]}\n"
+                f"`{progress_text}`\n\n"
+                "Please scroll on TikTok or wait. This process takes time depending on the website file assets volume."
+            )
+        except Exception:
+            pass
+        i += 1
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
@@ -64,12 +103,12 @@ async def message_handler(event):
         url = event.text.strip()
         del user_states[user_id]
 
-        if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', url, re.IGNORECASE):
+        if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\)', url, re.IGNORECASE):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
-        # 1. Gagawa tayo ng panimulang tracker text block
-        status_msg = await event.respond("Preparing scraper parameters...")
+        # 1. Inform user process has initiated
+        status_msg = await event.respond("Initiating crawler network engine...")
         
         channel_log = (
             "New Website Dump Request\n\n"
@@ -93,7 +132,7 @@ async def message_handler(event):
         
         os.makedirs(folder_name, exist_ok=True)
 
-        # Ang configuration na ito ay maglalabas ng line tracking data para sa tracking calculations
+        # Inalis ang bandwidth limit at delay throttling para maging real-time ang system pipe streaming
         wget_command = [
             "wget",
             "--recursive",
@@ -103,62 +142,32 @@ async def message_handler(event):
             "--convert-links",
             "--span-hosts=off",
             "--no-parent",
-            "--wait=2",
-            "--random-wait",
-            "--limit-rate=120k",
             "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "--header=Accept-Language: en-US,en;q=0.5",
             f"--header=Referer: {url}",
-            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit=605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
             "--execute", "robots=off",
             "-P", folder_name,
             url
         ]
 
+        # 2. Sinisimulan ang background progress tracker task loop [1]
+        tracker_task = asyncio.create_task(track_progress(folder_name, status_msg))
+
         try:
-            # 2. Babasahin natin ang stderr data ng wget para makuha ang system logs habang nagda-download
             process = await asyncio.create_subprocess_exec(
                 *wget_command,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE
+                stderr=subprocess.DEVNULL
             )
-
-            # Ang loop na ito ay nagbabasa ng real-time logs nang hindi pinupuno ang telegram execution line
-            last_percentage = -1
-            downloaded_files = 0
-            
-            while True:
-                line = await process.stderr.readline()
-                if not line:
-                    break
-                
-                log_line = line.decode('utf-8', errors='ignore')
-                
-                # Naghahanap ng data markers sa wget logs (e.g., download completions)
-                if "saved" in log_line or "saving" in log_line:
-                    downloaded_files += 1
-                    
-                    # Gumagawa tayo ng simulated growth increments batay sa dynamic files volume
-                    # para maiwasan ang biglang pagbagal ng Render interface network
-                    current_percent = min(98, downloaded_files * 7) 
-                    
-                    if current_percent != last_percentage and current_percent % 15 == 0:
-                        last_percentage = current_percent
-                        try:
-                            await status_msg.edit(
-                                f"Dumping please wait...\nProgress: {current_percent}%\n\n"
-                                "The bot is scraping the front&backend file configuration profile assets."
-                            )
-                        except Exception:
-                            pass
-                        await asyncio.sleep(1) # Safety window interval para maiwasan ang structural flood rate limit
-
             await process.wait()
+
+            # Ihihinto ang progress loop kapag tapos na ang wget subprocess execution line [1]
+            tracker_task.cancel()
 
             if not bot.is_connected():
                 await bot.connect()
 
-            # 3. Kapag kumpleto na, dadaan ito sa compilation protocol
             if os.path.exists(folder_name) and os.listdir(folder_name):
                 try:
                     await status_msg.edit("Dump complete. Compiling source files to ZIP package format...")
@@ -170,7 +179,7 @@ async def message_handler(event):
 
                 caption_text = f"Website Dump Successful.\n\nTarget Link: {url}"
                 
-                # Ipinapadala natin ito gamit ang iisang call execution block para maiwasan ang double posting issue
+                # Isa lang ang send_file operation para maiwasan ang double duplication issue [1]
                 await bot.send_file(event.chat_id, full_zip_path, caption=caption_text)
                 
                 try:
@@ -192,6 +201,7 @@ async def message_handler(event):
                     await event.respond("Dump failed. No assets collected. The domain may be offline or protected.")
 
         except Exception as e:
+            tracker_task.cancel()
             if not bot.is_connected():
                 await bot.connect()
             try:
@@ -205,7 +215,7 @@ async def message_handler(event):
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode with live loop tracking...")
+    print("System running in professional mode with active real-time disk tracking...")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
