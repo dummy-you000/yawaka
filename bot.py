@@ -115,8 +115,8 @@ async def message_handler(event):
         url = event.text.strip()
         del user_states[user_id]
 
-        # ITINAMA NA REGEX: Mas maluwag at tinatanggap ang lahat ng http at https links na may kahit anong subfolders/paths
-        if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\)', url, re.IGNORECASE):
+        # Inayos na link rule checker para gumana sa kahit anong http/https formats
+        if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
@@ -179,10 +179,10 @@ async def message_handler(event):
             if not bot.is_connected():
                 await bot.connect()
 
-            電力_final_size = get_dir_size(folder_name)
+            final_size = get_dir_size(folder_name)
             
             if os.path.exists(folder_name) and os.listdir(folder_name):
-                if電力_final_size >= 419430400:
+                if final_size >= 419430400:
                     try:
                         await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **400MB safety threshold** on our server tier. Compiling what was collected so far...")
                     except Exception:
