@@ -12,7 +12,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdn
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
 # =================================================
 
-# Gagawa tayo ng event loop bago i-load ang Telegram Client para sa Python 3.14+ compatibility
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -69,10 +68,8 @@ async def message_handler(event):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
-        status_msg = await event.respond(
-            "Dumping please wait...\n\n"
-            "Go scroll on tiktok this take time it depends on website file the bot is scraping the front&backend file."
-        )
+        # 1. Gagawa tayo ng panimulang tracker text block
+        status_msg = await event.respond("Preparing scraper parameters...")
         
         channel_log = (
             "New Website Dump Request\n\n"
@@ -96,6 +93,7 @@ async def message_handler(event):
         
         os.makedirs(folder_name, exist_ok=True)
 
+        # Ang configuration na ito ay maglalabas ng line tracking data para sa tracking calculations
         wget_command = [
             "wget",
             "--recursive",
@@ -118,19 +116,52 @@ async def message_handler(event):
         ]
 
         try:
+            # 2. Babasahin natin ang stderr data ng wget para makuha ang system logs habang nagda-download
             process = await asyncio.create_subprocess_exec(
                 *wget_command,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.PIPE
             )
+
+            # Ang loop na ito ay nagbabasa ng real-time logs nang hindi pinupuno ang telegram execution line
+            last_percentage = -1
+            downloaded_files = 0
+            
+            while True:
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                
+                log_line = line.decode('utf-8', errors='ignore')
+                
+                # Naghahanap ng data markers sa wget logs (e.g., download completions)
+                if "saved" in log_line or "saving" in log_line:
+                    downloaded_files += 1
+                    
+                    # Gumagawa tayo ng simulated growth increments batay sa dynamic files volume
+                    # para maiwasan ang biglang pagbagal ng Render interface network
+                    current_percent = min(98, downloaded_files * 7) 
+                    
+                    if current_percent != last_percentage and current_percent % 15 == 0:
+                        last_percentage = current_percent
+                        try:
+                            await status_msg.edit(
+                                f"Dumping please wait...\nProgress: {current_percent}%\n\n"
+                                "The bot is scraping the front&backend file configuration profile assets."
+                            )
+                        except Exception:
+                            pass
+                        await asyncio.sleep(1) # Safety window interval para maiwasan ang structural flood rate limit
+
             await process.wait()
 
             if not bot.is_connected():
                 await bot.connect()
 
+            # 3. Kapag kumpleto na, dadaan ito sa compilation protocol
             if os.path.exists(folder_name) and os.listdir(folder_name):
                 try:
-                    await status_msg.edit("Dump complete. Archiving files...")
+                    await status_msg.edit("Dump complete. Compiling source files to ZIP package format...")
                 except Exception:
                     pass
                 
@@ -138,6 +169,8 @@ async def message_handler(event):
                 full_zip_path = f"dump_{user_id}.zip"
 
                 caption_text = f"Website Dump Successful.\n\nTarget Link: {url}"
+                
+                # Ipinapadala natin ito gamit ang iisang call execution block para maiwasan ang double posting issue
                 await bot.send_file(event.chat_id, full_zip_path, caption=caption_text)
                 
                 try:
@@ -172,7 +205,7 @@ async def message_handler(event):
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode...")
+    print("System running in professional mode with live loop tracking...")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
