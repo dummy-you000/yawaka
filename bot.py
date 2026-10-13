@@ -3,6 +3,8 @@ import re
 import subprocess
 import shutil
 import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telethon import TelegramClient, events, Button
 
 # ================= CONFIGURATION =================
@@ -11,6 +13,25 @@ API_HASH = os.environ.get("API_HASH", "3a0d6aed31669861d23f96375258e723")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk")
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
 # =================================================
+
+# --- LIGHTWEIGHT WEB SERVER FOR RENDER HEALTH CHECKS ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and running smoothly.")
+
+    def log_message(self, format, *args):
+        return  # Pinapatay ang spammy console logs mula sa health check pings
+
+def run_health_server():
+    # Awtomatikong kukunin ang Port 10000 mula sa Render environment variables
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"Health check web server active on port {port}...")
+    server.serve_forever()
+# --------------------------------------------------------
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -115,7 +136,6 @@ async def message_handler(event):
         url = event.text.strip()
         del user_states[user_id]
 
-        # Inayos na link rule checker para gumana sa kahit anong http/https formats
         if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
@@ -226,16 +246,19 @@ async def message_handler(event):
             except Exception:
                 await event.respond(f"An unexpected error occurred during processing.\nError Details: {str(e)}")
         
-        finally:
-            if os.path.exists(folder_name):
-                shutil.rmtree(folder_name)
+        fclose = True
+        if os.path.exists(folder_name):
+            shutil.rmtree(folder_name)
     
     raise events.StopPropagation
 
 async def main():
+    # Pasisimulan ang internal web server sa background gamit ang magkahiwalay na operational thread
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
+
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode...")
+    print("System running in professional mode with Render Web Server patches active...")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    loop.run_until_complete(main())
