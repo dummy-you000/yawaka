@@ -32,7 +32,6 @@ def get_dir_size(path):
 async def track_progress(folder_name, status_msg, process):
     dots = ["⏳", "⏳.", "⏳..", "⏳..."]
     i = 0
-    # Safe limit na 400MB sa bytes (400 * 1024 * 1024)
     MAX_ALLOWED_BYTES = 419430400 
     
     while True:
@@ -116,6 +115,7 @@ async def message_handler(event):
         url = event.text.strip()
         del user_states[user_id]
 
+        # ITINAMA NA REGEX: Mas maluwag at tinatanggap ang lahat ng http at https links na may kahit anong subfolders/paths
         if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\)', url, re.IGNORECASE):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
@@ -179,10 +179,10 @@ async def message_handler(event):
             if not bot.is_connected():
                 await bot.connect()
 
-            current_final_size = get_dir_size(folder_name)
+            電力_final_size = get_dir_size(folder_name)
             
             if os.path.exists(folder_name) and os.listdir(folder_name):
-                if current_final_size >= 419430400:
+                if電力_final_size >= 419430400:
                     try:
                         await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **400MB safety threshold** on our server tier. Compiling what was collected so far...")
                     except Exception:
