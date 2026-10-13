@@ -44,7 +44,6 @@ async def track_progress(folder_name, status_msg, process):
         size_kb = size_bytes / 1024
         size_mb = size_kb / 1024
         
-        # ⚠️ CRITICAL SAFETY CHECK: Kapag lumagpas sa 400MB, papatayin ang download process bago mag-crash ang Render
         if size_bytes >= MAX_ALLOWED_BYTES:
             try:
                 process.terminate()
@@ -67,7 +66,7 @@ async def track_progress(folder_name, status_msg, process):
             pass
         i += 1
 
-@bot.on(events.NewMessage(pattern='/start', stop_propagation=True))
+@bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
     sender = await event.get_sender()
     first_name = sender.first_name if sender.first_name else "User"
@@ -75,7 +74,6 @@ async def start_handler(event):
     welcome_text = (
         f"Welcome, {first_name}.\n\n"
         "Please select an option below to interact with the system or contact support if you encounter any system errors."
-        "WAG KANG EENGOT ENGOT RISKY DIN TO"
     )
     
     buttons = [
@@ -83,8 +81,9 @@ async def start_handler(event):
         [Button.inline("View Owner / Support", data="menu_owner")]
     ]
     await event.respond(welcome_text, buttons=buttons)
+    raise events.StopPropagation
 
-@bot.on(events.CallbackQuery(stop_propagation=True))
+@bot.on(events.CallbackQuery)
 async def callback_handler(event):
     data = event.data.decode('utf-8')
     user_id = event.sender_id
@@ -96,12 +95,14 @@ async def callback_handler(event):
             "Administrator: @cosmo64bit\n\n"
             "Use /start to return to the main menu."
         )
+        raise events.StopPropagation
 
     elif data == "menu_dump":
         user_states[user_id] = "WAITING_FOR_URL"
         await event.edit("Please send the website link you want to dump:\n(Supports http, https, and deep subfolders)")
+        raise events.StopPropagation
 
-@bot.on(events.NewMessage(stop_propagation=True))
+@bot.on(events.NewMessage)
 async def message_handler(event):
     user_id = event.sender_id
     sender = await event.get_sender()
@@ -115,7 +116,7 @@ async def message_handler(event):
         url = event.text.strip()
         del user_states[user_id]
 
-        if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\$', url, re.IGNORECASE):
+        if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\)', url, re.IGNORECASE):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
@@ -143,7 +144,6 @@ async def message_handler(event):
         
         os.makedirs(folder_name, exist_ok=True)
 
-        # In-optimize ang wget command parameters para sa 400MB threshold and skip heavy media binaries
         wget_command = [
             "wget",
             "--recursive",
@@ -153,8 +153,8 @@ async def message_handler(event):
             "--convert-links",
             "--span-hosts=off",
             "--no-parent",
-            "--quota=400m", # Nilagyan ng matigas na quota limit ang system command execution profile
-            "--reject", "mp4,mkv,avi,mov,zip,rar,7z,tar,exe,msi,apk,dmg,iso,mp3,wav", # Nilaktawan ang malalaking file extensions
+            "--quota=400m", 
+            "--reject", "mp4,mkv,avi,mov,zip,rar,7z,tar,exe,msi,apk,dmg,iso,mp3,wav", 
             "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "--header=Accept-Language: en-US,en;q=0.5",
             f"--header=Referer: {url}",
@@ -171,7 +171,6 @@ async def message_handler(event):
                 stderr=subprocess.DEVNULL
             )
 
-            # Ipinasa ang process execution pipeline sa background tracker task rule block
             tracker_task = asyncio.create_task(track_progress(folder_name, status_msg, process))
             
             await process.wait()
@@ -180,7 +179,6 @@ async def message_handler(event):
             if not bot.is_connected():
                 await bot.connect()
 
-            # Ise-check kung umabot o lumagpas ba sa maximum threshold block bago mag-pack
             current_final_size = get_dir_size(folder_name)
             
             if os.path.exists(folder_name) and os.listdir(folder_name):
@@ -231,10 +229,12 @@ async def message_handler(event):
         finally:
             if os.path.exists(folder_name):
                 shutil.rmtree(folder_name)
+    
+    raise events.StopPropagation
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode with 400MB threshold constraints configuration profiles...")
+    print("System running in professional mode...")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
