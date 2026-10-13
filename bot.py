@@ -20,7 +20,6 @@ bot = TelegramClient('site_dumper_bot', API_ID, API_HASH, loop=loop)
 user_states = {}
 
 def get_dir_size(path):
-    """Kinukuha ang kabuuang sukat ng folder para sa live size progress tracking."""
     total_size = 0
     if os.path.exists(path):
         for dirpath, dirnames, filenames in os.walk(path):
@@ -30,12 +29,14 @@ def get_dir_size(path):
                     total_size += os.path.getsize(fp)
     return total_size
 
-async def track_progress(folder_name, status_msg):
-    """Hiwalay na background task na nagpapakita ng live download progress animation."""
+async def track_progress(folder_name, status_msg, process):
     dots = ["⏳", "⏳.", "⏳..", "⏳..."]
     i = 0
+    # Safe limit na 400MB sa bytes (400 * 1024 * 1024)
+    MAX_ALLOWED_BYTES = 419430400 
+    
     while True:
-        await asyncio.sleep(3) # Nag-e-edit kada 3 segundo para maiwasan ang Telegram rate limit
+        await asyncio.sleep(3)
         if not os.path.exists(folder_name):
             continue
             
@@ -43,11 +44,18 @@ async def track_progress(folder_name, status_msg):
         size_kb = size_bytes / 1024
         size_mb = size_kb / 1024
         
-        # Gumagawa ng malinis at scannable na visual text asset
+        # ⚠️ CRITICAL SAFETY CHECK: Kapag lumagpas sa 400MB, papatayin ang download process bago mag-crash ang Render
+        if size_bytes >= MAX_ALLOWED_BYTES:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+            break
+        
         if size_mb > 1:
-            progress_text = f"Scraping front & backend assets... {size_mb:.2f} MB collected"
+            progress_text = f"Scraping assets... {size_mb:.2f} MB / 400.00 MB collected"
         else:
-            progress_text = f"Scraping front & backend assets... {size_kb:.1f} KB collected"
+            progress_text = f"Scraping assets... {size_kb:.1f} KB collected"
             
         try:
             await status_msg.edit(
@@ -59,7 +67,7 @@ async def track_progress(folder_name, status_msg):
             pass
         i += 1
 
-@bot.on(events.NewMessage(pattern='/start'))
+@bot.on(events.NewMessage(pattern='/start', stop_propagation=True))
 async def start_handler(event):
     sender = await event.get_sender()
     first_name = sender.first_name if sender.first_name else "User"
@@ -67,6 +75,7 @@ async def start_handler(event):
     welcome_text = (
         f"Welcome, {first_name}.\n\n"
         "Please select an option below to interact with the system or contact support if you encounter any system errors."
+        "WAG KANG EENGOT ENGOT RISKY DIN TO"
     )
     
     buttons = [
@@ -75,7 +84,7 @@ async def start_handler(event):
     ]
     await event.respond(welcome_text, buttons=buttons)
 
-@bot.on(events.CallbackQuery)
+@bot.on(events.CallbackQuery(stop_propagation=True))
 async def callback_handler(event):
     data = event.data.decode('utf-8')
     user_id = event.sender_id
@@ -92,22 +101,24 @@ async def callback_handler(event):
         user_states[user_id] = "WAITING_FOR_URL"
         await event.edit("Please send the website link you want to dump:\n(Supports http, https, and deep subfolders)")
 
-@bot.on(events.NewMessage)
+@bot.on(events.NewMessage(stop_propagation=True))
 async def message_handler(event):
     user_id = event.sender_id
     sender = await event.get_sender()
     username = f"@{sender.username}" if sender.username else "No Username"
     first_name = sender.first_name if sender.first_name else "User"
     
+    if event.text.startswith('/start'):
+        return
+
     if user_id in user_states and user_states[user_id] == "WAITING_FOR_URL":
         url = event.text.strip()
         del user_states[user_id]
 
-        if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\)', url, re.IGNORECASE):
+        if not re.match(r'^https?://[^\s/\(.?#].[^\s]*\$', url, re.IGNORECASE):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
-        # 1. Inform user process has initiated
         status_msg = await event.respond("Initiating crawler network engine...")
         
         channel_log = (
@@ -132,7 +143,7 @@ async def message_handler(event):
         
         os.makedirs(folder_name, exist_ok=True)
 
-        # Inalis ang bandwidth limit at delay throttling para maging real-time ang system pipe streaming
+        # In-optimize ang wget command parameters para sa 400MB threshold and skip heavy media binaries
         wget_command = [
             "wget",
             "--recursive",
@@ -142,17 +153,16 @@ async def message_handler(event):
             "--convert-links",
             "--span-hosts=off",
             "--no-parent",
+            "--quota=400m", # Nilagyan ng matigas na quota limit ang system command execution profile
+            "--reject", "mp4,mkv,avi,mov,zip,rar,7z,tar,exe,msi,apk,dmg,iso,mp3,wav", # Nilaktawan ang malalaking file extensions
             "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "--header=Accept-Language: en-US,en;q=0.5",
             f"--header=Referer: {url}",
-            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit=605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
             "--execute", "robots=off",
             "-P", folder_name,
             url
         ]
-
-        # 2. Sinisimulan ang background progress tracker task loop [1]
-        tracker_task = asyncio.create_task(track_progress(folder_name, status_msg))
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -160,26 +170,35 @@ async def message_handler(event):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            await process.wait()
 
-            # Ihihinto ang progress loop kapag tapos na ang wget subprocess execution line [1]
+            # Ipinasa ang process execution pipeline sa background tracker task rule block
+            tracker_task = asyncio.create_task(track_progress(folder_name, status_msg, process))
+            
+            await process.wait()
             tracker_task.cancel()
 
             if not bot.is_connected():
                 await bot.connect()
 
+            # Ise-check kung umabot o lumagpas ba sa maximum threshold block bago mag-pack
+            current_final_size = get_dir_size(folder_name)
+            
             if os.path.exists(folder_name) and os.listdir(folder_name):
-                try:
-                    await status_msg.edit("Dump complete. Compiling source files to ZIP package format...")
-                except Exception:
-                    pass
+                if current_final_size >= 419430400:
+                    try:
+                        await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **400MB safety threshold** on our server tier. Compiling what was collected so far...")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await status_msg.edit("Dump complete. Compiling source files to ZIP package format...")
+                    except Exception:
+                        pass
                 
                 shutil.make_archive(f"dump_{user_id}", 'zip', folder_name)
                 full_zip_path = f"dump_{user_id}.zip"
 
                 caption_text = f"Website Dump Successful.\n\nTarget Link: {url}"
-                
-                # Isa lang ang send_file operation para maiwasan ang double duplication issue [1]
                 await bot.send_file(event.chat_id, full_zip_path, caption=caption_text)
                 
                 try:
@@ -215,7 +234,7 @@ async def message_handler(event):
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode with active real-time disk tracking...")
+    print("System running in professional mode with 400MB threshold constraints configuration profiles...")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
