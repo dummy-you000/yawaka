@@ -1,5 +1,4 @@
 import os
-import re
 import subprocess
 import shutil
 import asyncio
@@ -26,7 +25,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         return  # Pinapatay ang console logs mula sa health check pings
 
 def run_health_server():
-    # Awtomatikong kukunin ang Port 10000 mula sa Render environment variables
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     print(f"Health check web server active on port {port}...")
@@ -41,6 +39,7 @@ bot = TelegramClient('site_dumper_bot', API_ID, API_HASH, loop=loop)
 user_states = {}
 
 def get_dir_size(path):
+    """Kinukuha ang kabuuang sukat ng folder sa disk."""
     total_size = 0
     if os.path.exists(path):
         for dirpath, dirnames, filenames in os.walk(path):
@@ -50,41 +49,21 @@ def get_dir_size(path):
                     total_size += os.path.getsize(fp)
     return total_size
 
-async def track_progress(folder_name, status_msg, process):
-    dots = ["⏳", "⏳.", "⏳..", "⏳..."]
-    i = 0
-    MAX_ALLOWED_BYTES = 419430400 
-    
+async def size_guard(folder_name, process):
+    """Background loop na nagbabantay para hindi lumampas sa 20MB limit ang folder size."""
+    # 20MB limit in bytes (20 * 1024 * 1024)
+    MAX_BYTES = 20971520 
     while True:
-        await asyncio.sleep(3)
-        if not os.path.exists(folder_name):
-            continue
-            
-        size_bytes = get_dir_size(folder_name)
-        size_kb = size_bytes / 1024
-        size_mb = size_kb / 1024
-        
-        if size_bytes >= MAX_ALLOWED_BYTES:
-            try:
-                process.terminate()
-            except Exception:
-                pass
+        await asyncio.sleep(2)
+        if process.returncode is not None:
             break
-        
-        if size_mb > 1:
-            progress_text = f"Scraping assets... {size_mb:.2f} MB / 400.00 MB collected"
-        else:
-            progress_text = f"Scraping assets... {size_kb:.1f} KB collected"
-            
-        try:
-            await status_msg.edit(
-                f"**Dumping Website** {dots[i % 4]}\n"
-                f"`{progress_text}`\n\n"
-                "Please scroll on TikTok or wait. This process takes time depending on the website file assets volume."
-            )
-        except Exception:
-            pass
-        i += 1
+        if os.path.exists(folder_name):
+            if get_dir_size(folder_name) >= MAX_BYTES:
+                try:
+                    process.terminate()  # Pwersahang pinapatay ang wget kapag lumampas sa 20MB
+                except Exception:
+                    pass
+                break
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
@@ -140,7 +119,10 @@ async def message_handler(event):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
-        status_msg = await event.respond("Initiating crawler network engine...")
+        status_msg = await event.respond(
+            "Dumping please wait...\n\n"
+            "Go scroll on tiktok this take time it depends on website file the bot is scraping the front&backend file."
+        )
         
         channel_log = (
             "New Website Dump Request\n\n"
@@ -173,8 +155,10 @@ async def message_handler(event):
             "--convert-links",
             "--span-hosts=off",
             "--no-parent",
-            "--quota=400m", 
-            "--reject", "mp4,mkv,avi,mov,zip,rar,7z,tar,exe,msi,apk,dmg,iso,mp3,wav", 
+            "--wait=2",
+            "--random-wait",
+            "--limit-rate=120k",
+            "--quota=20m",  # Inutusan ang wget na kusang huminto kapag umabot ng 20MB ang download quota nito
             "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "--header=Accept-Language: en-US,en;q=0.5",
             f"--header=Referer: {url}",
@@ -191,20 +175,22 @@ async def message_handler(event):
                 stderr=subprocess.DEVNULL
             )
 
-            tracker_task = asyncio.create_task(track_progress(folder_name, status_msg, process))
+            # Sinisimulan ang back-end watcher task para bantayan ang 20MB structural ceiling limit
+            guard_task = asyncio.create_task(size_guard(folder_name, process))
             
             await process.wait()
-            tracker_task.cancel()
+            guard_task.cancel()  # Papatayin ang background watcher kapag natapos na ang download process
 
             if not bot.is_connected():
                 await bot.connect()
 
             final_size = get_dir_size(folder_name)
-            
+
             if os.path.exists(folder_name) and os.listdir(folder_name):
-                if final_size >= 419430400:
+                # Mensahe kapag ang site ay naputol dahil lumampas sa itinakdang limitasyon
+                if final_size >= 20971520:
                     try:
-                        await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **400MB safety threshold** on our server tier. Compiling what was collected so far...")
+                        await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **20MB max size safety threshold**. Compiling what was collected so far...")
                     except Exception:
                         pass
                 else:
@@ -238,7 +224,6 @@ async def message_handler(event):
                     await event.respond("Dump failed. No assets collected. The domain may be offline or protected.")
 
         except Exception as e:
-            tracker_task.cancel()
             if not bot.is_connected():
                 await bot.connect()
             try:
@@ -252,12 +237,11 @@ async def message_handler(event):
     raise events.StopPropagation
 
 async def main():
-    # Pasisimulan ang internal web server sa background gamit ang magkahiwalay na operational thread
     web_thread = threading.Thread(target=run_health_server, daemon=True)
     web_thread.start()
 
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode with Render Web Server patches active...")
+    print("System running in professional mode with a strict 20MB max size allocation model...")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
