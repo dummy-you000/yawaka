@@ -260,6 +260,6 @@ async def main():
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-web_thread = threading.Thread(target=run_health_server, daemon=True)
-web_thread.start()
-loop.run_until_complete(main())
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
+    loop.run_until_complete(main())
