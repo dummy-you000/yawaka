@@ -16,7 +16,6 @@ LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
 WELCOME_STICKER = "https://giphy.com"
 
 # PROXY SETUP: Dito babasahin ang proxy server mula sa iyong Render Env settings
-# Format halimbawa: http://username:password@proxy_ip:port
 PROXY_SERVER = os.environ.get("PROXY_SERVER", "")
 # =================================================
 
@@ -158,7 +157,6 @@ async def message_handler(event):
         
         os.makedirs(folder_name, exist_ok=True)
 
-        # Base configuration para sa wget parameters
         wget_command = [
             "wget",
             "--recursive",
@@ -180,7 +178,6 @@ async def message_handler(event):
             "-P", folder_name
         ]
 
-        # 🛡️ ANONYMITY LAYER: Kung may proxy setup sa Render Env, gagamitin ito ng wget
         env_vars = os.environ.copy()
         if PROXY_SERVER:
             wget_command.extend(["--proxy=on"])
@@ -190,7 +187,6 @@ async def message_handler(event):
         wget_command.append(url)
 
         try:
-            # Ipinapasa ang env_vars na naglalaman ng nakatagong proxy rules sa background network pipe
             process = await asyncio.create_subprocess_exec(
                 *wget_command,
                 stdout=subprocess.DEVNULL,
@@ -259,13 +255,11 @@ async def message_handler(event):
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    
-print("System running in professional mode with proxy anonymity profiles active...")
+    print("System running in professional mode with correct global loop assignment protocols...")
+    await bot.run_until_disconnected()
 
-await bot.run_until_disconnected()
+if __name__ == '__main__':
+    # 1. Fire up the web ping listener on its isolated server daemon thread
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
 
-if name == 'main':
-web_thread = threading.Thread(target=run_health_server, daemon=True)
-
-web_thread.start()
-loop.run_until_complete(main())
