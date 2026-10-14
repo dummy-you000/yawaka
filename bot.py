@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 from telethon import TelegramClient, events, Button
 
 # ================= CONFIGURATION =================
-# INAYOS: Ibinalik sa tamang Env Variable Keys at ginawang default values ang iyong mga credentials
 API_ID = int(os.environ.get("API_ID", 36920878))
 API_HASH = os.environ.get("API_HASH", "3a0d6aed31669861d23f96375258e723")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk")
@@ -19,6 +18,9 @@ LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
 PORT = int(os.environ.get("PORT", "10000"))
 PROXY_SERVER = os.environ.get("PROXY_SERVER", "")
 MAX_BYTES = 20 * 1024 * 1024
+
+# IDINAGDAG: Dito nakalagay ang iyong "HI! I'M COSMO." GIPHY Animated Sticker link
+WELCOME_STICKER = "https://media0.giphy.com/media/v1.Y2lkPTZjMDliOTUydnUxeDB2cDdsbHNiejNydWE4a3pyeDNpbG93Y2h0bmptbHNhbGRlNSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9dHM/abFYZUvkqVXQqMfsAA/giphy.gif"
 # =================================================
 
 logging.basicConfig(
@@ -27,7 +29,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cosmo_bot")
 
-# Setup global loop configuration para sa Render
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -85,6 +86,12 @@ async def start_handler(event):
     sender = await event.get_sender()
     first_name = getattr(sender, "first_name", None) or "User"
 
+    # IDINAGDAG: Ipinapadala ang welcoming sticker bago mag-respond ng buttons
+    try:
+        await bot.send_file(event.chat_id, WELCOME_STICKER)
+    except Exception as e:
+        logger.error(f"Failed to send welcome sticker asset: {e}")
+
     buttons = [
         [Button.inline("Dump Website", data=b"menu_dump")],
         [Button.inline("View Owner / Support", data=b"menu_owner")],
@@ -118,8 +125,7 @@ async def callback_handler(event):
     else:
         await event.answer("Unknown option.", alert=True)
 
-# ================= MESSAGE HANDLER (IDINAGDAG) =================
-# Kakalapin nito ang text input ng user kapag naghihintay ang bot ng URL link
+# ================= MESSAGE HANDLER =================
 @bot.on(events.NewMessage)
 async def message_handler(event):
     user_id = event.sender_id
@@ -130,13 +136,12 @@ async def message_handler(event):
 
     if user_id in user_states and user_states[user_id] == "WAITING_FOR_URL":
         url = text
-        del user_states[user_id] # Burahin agad ang state para iwas loop/spam
+        del user_states[user_id]
 
         if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
-        # Ipasa sa download function ang event at detalye
         await download_website(event, url, user_id)
 
 # ================= WEBSITE DOWNLOAD =================
@@ -151,9 +156,8 @@ async def download_website(event, url, user_id):
             await event.respond("Download failed: wget is not installed. Check your Render Environment.")
             return
 
-        status_msg = await event.respond("Download started. Please wait...")
+        status_msg = await event.respond("DUMPING PLEASE WAIT...,\n\nNOOD KA MUNA TIKTOK OR FACEBOOK. IT DEPENDS KUNG GAANO KATAGAL MAG DUMP KAYA I WAWAIT PA DINADUMP PA KASI NG BOT NATO FRONT&BACKEND NG WEBSITE THANK YOU.")
 
-        # I-verify kung valid at public IP ang host destination
         hostname = urlparse(url).hostname
         try:
             addresses = await asyncio.get_running_loop().getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
@@ -184,7 +188,7 @@ async def download_website(event, url, user_id):
             "--quota=20m",
             "--timeout=20",
             "--tries=2",
-            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit=605.1.15",
             "-P", folder_name,
             url,
         ]
@@ -204,7 +208,6 @@ async def download_website(event, url, user_id):
         )
 
         try:
-            # Subaybayan ang size habang nagda-download (Size Guard)
             while process.returncode is None:
                 await asyncio.sleep(2)
                 if get_dir_size(folder_name) > MAX_BYTES:
@@ -230,8 +233,8 @@ async def download_website(event, url, user_id):
             await status_msg.edit("Could not create the ZIP archive.")
             return
 
-        await event.respond(file=zip_name, message=f"Website archive created.\nTarget: {url}")
-        await send_log(f"Website archive completed\nUser ID: {user_id}\nTarget: {url}\nSize: {os.path.getsize(zip_name)} bytes")
+        await event.respond(file=zip_name, message=f"DUMP SUCCESSFUL\n\nTarget: {url}")
+        await send_log(f"DUMP SUCCESSFUL\nUser ID: {user_id}\nTarget: {url}\nSize: {os.path.getsize(zip_name)} bytes")
         await status_msg.delete()
 
     except Exception as e:
