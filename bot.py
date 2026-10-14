@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import shutil
 import asyncio
@@ -22,24 +23,24 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive and running smoothly.")
 
     def log_message(self, format, *args):
-        return  # Pinapatay ang console logs mula sa health check pings
+        return  # Pinapatay ang spammy console logs mula sa health check pings
 
 def run_health_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    print(f"Health check web server active on port {port}...")
-    server.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        print(f"Health check web server active on port {path_port if 'path_port' in locals() else port}...")
+        server.serve_forever()
+    except Exception as e:
+        print(f"Web server error: {e}")
 # --------------------------------------------------------
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-bot = TelegramClient('site_dumper_bot', API_ID, API_HASH, loop=loop)
+# Ininitialize ang client nang walang rigid pre-constructed network block boundaries
+bot = TelegramClient('site_dumper_bot', API_ID, API_HASH)
 
 user_states = {}
 
 def get_dir_size(path):
-    """Kinukuha ang kabuuang sukat ng folder sa disk."""
     total_size = 0
     if os.path.exists(path):
         for dirpath, dirnames, filenames in os.walk(path):
@@ -50,7 +51,6 @@ def get_dir_size(path):
     return total_size
 
 async def size_guard(folder_name, process):
-    """Background loop na nagbabantay para hindi lumampas sa 20MB limit ang folder size."""
     # 20MB limit in bytes (20 * 1024 * 1024)
     MAX_BYTES = 20971520 
     while True:
@@ -158,7 +158,7 @@ async def message_handler(event):
             "--wait=2",
             "--random-wait",
             "--limit-rate=120k",
-            "--quota=20m",  # Inutusan ang wget na kusang huminto kapag umabot ng 20MB ang download quota nito
+            "--quota=20m",  # Limit sa 20MB quota download pipeline
             "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "--header=Accept-Language: en-US,en;q=0.5",
             f"--header=Referer: {url}",
@@ -175,11 +175,10 @@ async def message_handler(event):
                 stderr=subprocess.DEVNULL
             )
 
-            # Sinisimulan ang back-end watcher task para bantayan ang 20MB structural ceiling limit
             guard_task = asyncio.create_task(size_guard(folder_name, process))
             
             await process.wait()
-            guard_task.cancel()  # Papatayin ang background watcher kapag natapos na ang download process
+            guard_task.cancel()  
 
             if not bot.is_connected():
                 await bot.connect()
@@ -187,7 +186,6 @@ async def message_handler(event):
             final_size = get_dir_size(folder_name)
 
             if os.path.exists(folder_name) and os.listdir(folder_name):
-                # Mensahe kapag ang site ay naputol dahil lumampas sa itinakdang limitasyon
                 if final_size >= 20971520:
                     try:
                         await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **20MB max size safety threshold**. Compiling what was collected so far...")
@@ -236,13 +234,13 @@ async def message_handler(event):
     
     raise events.StopPropagation
 
-async def main():
+# PANGUNAHING ENGINE LIFECYCLE RUNNER
+if __name__ == '__main__':
+    # 1. Patatakbuhin ang Render Health Server sa background gamit ang daemon thread
     web_thread = threading.Thread(target=run_health_server, daemon=True)
     web_thread.start()
 
-    await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode with a strict 20MB max size allocation model...")
-    await bot.run_until_disconnected()
-
-if __name__ == '__main__':
-    loop.run_until_complete(main())
+    # 2. Patatakbuhin ang Telethon Client sa main execution thread nang walang structural block conflicts
+    print("System running in professional mode with async decoupling patches active...")
+    bot.start(bot_token=BOT_TOKEN)
+    bot.run_until_disconnected()
