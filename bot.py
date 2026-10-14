@@ -13,7 +13,8 @@ API_HASH = os.environ.get("API_HASH", "3a0d6aed31669861d23f96375258e723")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk")
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
 
-WELCOME_STICKER = "https://giphy.com"
+# FIXED: Direct GIPHY media CDN path na ipinadala mo para sa iyong animated "COSMO" logo
+WELCOME_STICKER = "https://media1.giphy.com/media/v1.Y2lkPTZjMDliOTUyM2c1d2x6Znc1bGhhN282Ym4zajFlM3RwZXg0dTBybTFsZTgxdGd2diZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9dHM/ZvUjM1sdqiGrkzI6f0/giphy.gif"
 
 # PROXY SETUP: Dito babasahin ang proxy server mula sa iyong Render Env settings
 PROXY_SERVER = os.environ.get("PROXY_SERVER", "")
@@ -259,7 +260,6 @@ async def main():
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    # 1. Fire up the web ping listener on its isolated server daemon thread
-    web_thread = threading.Thread(target=run_health_server, daemon=True)
-    web_thread.start()
-
+web_thread = threading.Thread(target=run_health_server, daemon=True)
+web_thread.start()
+loop.run_until_complete(main())
