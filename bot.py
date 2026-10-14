@@ -12,6 +12,12 @@ API_ID = int(os.environ.get("API_ID", 36920878))
 API_HASH = os.environ.get("API_HASH", "3a0d6aed31669861d23f96375258e723")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk")
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
+
+WELCOME_STICKER = "https://giphy.com"
+
+# PROXY SETUP: Dito babasahin ang proxy server mula sa iyong Render Env settings
+# Format halimbawa: http://username:password@proxy_ip:port
+PROXY_SERVER = os.environ.get("PROXY_SERVER", "")
 # =================================================
 
 # --- LIGHTWEIGHT WEB SERVER FOR RENDER HEALTH CHECKS ---
@@ -23,20 +29,22 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive and running smoothly.")
 
     def log_message(self, format, *args):
-        return  # Pinapatay ang spammy console logs mula sa health check pings
+        return  
 
 def run_health_server():
     try:
         port = int(os.environ.get("PORT", 10000))
         server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        print(f"Health check web server active on port {path_port if 'path_port' in locals() else port}...")
+        print(f"Health check web server active on port {port}...")
         server.serve_forever()
     except Exception as e:
-        print(f"Web server error: {e}")
+        print(f"Web server exception caught: {e}")
 # --------------------------------------------------------
 
-# Ininitialize ang client nang walang rigid pre-constructed network block boundaries
-bot = TelegramClient('site_dumper_bot', API_ID, API_HASH)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+bot = TelegramClient('site_dumper_bot', API_ID, API_HASH, loop=loop)
 
 user_states = {}
 
@@ -51,7 +59,6 @@ def get_dir_size(path):
     return total_size
 
 async def size_guard(folder_name, process):
-    # 20MB limit in bytes (20 * 1024 * 1024)
     MAX_BYTES = 20971520 
     while True:
         await asyncio.sleep(2)
@@ -60,7 +67,7 @@ async def size_guard(folder_name, process):
         if os.path.exists(folder_name):
             if get_dir_size(folder_name) >= MAX_BYTES:
                 try:
-                    process.terminate()  # Pwersahang pinapatay ang wget kapag lumampas sa 20MB
+                    process.terminate()  
                 except Exception:
                     pass
                 break
@@ -70,6 +77,11 @@ async def start_handler(event):
     sender = await event.get_sender()
     first_name = sender.first_name if sender.first_name else "User"
     
+    try:
+        await bot.send_file(event.chat_id, WELCOME_STICKER)
+    except Exception as e:
+        print(f"Failed to dispatch sticker asset item: {e}")
+
     welcome_text = (
         f"Welcome, {first_name}.\n\n"
         "Please select an option below to interact with the system or contact support if you encounter any system errors."
@@ -146,6 +158,7 @@ async def message_handler(event):
         
         os.makedirs(folder_name, exist_ok=True)
 
+        # Base configuration para sa wget parameters
         wget_command = [
             "wget",
             "--recursive",
@@ -158,21 +171,31 @@ async def message_handler(event):
             "--wait=2",
             "--random-wait",
             "--limit-rate=120k",
-            "--quota=20m",  # Limit sa 20MB quota download pipeline
+            "--quota=20m",  
             "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "--header=Accept-Language: en-US,en;q=0.5",
             f"--header=Referer: {url}",
             "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit=605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
             "--execute", "robots=off",
-            "-P", folder_name,
-            url
+            "-P", folder_name
         ]
 
+        # 🛡️ ANONYMITY LAYER: Kung may proxy setup sa Render Env, gagamitin ito ng wget
+        env_vars = os.environ.copy()
+        if PROXY_SERVER:
+            wget_command.extend(["--proxy=on"])
+            env_vars["http_proxy"] = PROXY_SERVER
+            env_vars["https_proxy"] = PROXY_SERVER
+
+        wget_command.append(url)
+
         try:
+            # Ipinapasa ang env_vars na naglalaman ng nakatagong proxy rules sa background network pipe
             process = await asyncio.create_subprocess_exec(
                 *wget_command,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                env=env_vars
             )
 
             guard_task = asyncio.create_task(size_guard(folder_name, process))
@@ -217,9 +240,9 @@ async def message_handler(event):
                     pass
             else:
                 try:
-                    await status_msg.edit("Dump failed. No assets collected. The domain may be offline or protected.")
+                    await status_msg.edit("Dump failed. No assets collected. The domain may be offline, protected, or proxy connection dropped.")
                 except Exception:
-                    await event.respond("Dump failed. No assets collected. The domain may be offline or protected.")
+                    await event.respond("Dump failed. No assets collected. The domain may be offline, protected, or proxy connection dropped.")
 
         except Exception as e:
             if not bot.is_connected():
@@ -234,13 +257,15 @@ async def message_handler(event):
     
     raise events.StopPropagation
 
-# PANGUNAHING ENGINE LIFECYCLE RUNNER
-if __name__ == '__main__':
-    # 1. Patatakbuhin ang Render Health Server sa background gamit ang daemon thread
-    web_thread = threading.Thread(target=run_health_server, daemon=True)
-    web_thread.start()
+async def main():
+    await bot.start(bot_token=BOT_TOKEN)
+    
+print("System running in professional mode with proxy anonymity profiles active...")
 
-    # 2. Patatakbuhin ang Telethon Client sa main execution thread nang walang structural block conflicts
-    print("System running in professional mode with async decoupling patches active...")
-    bot.start(bot_token=BOT_TOKEN)
-    bot.run_until_disconnected()
+await bot.run_until_disconnected()
+
+if name == 'main':
+web_thread = threading.Thread(target=run_health_server, daemon=True)
+
+web_thread.start()
+loop.run_until_complete(main())
