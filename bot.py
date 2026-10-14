@@ -1,262 +1,251 @@
 import os
-import re
-import subprocess
-import shutil
 import asyncio
+import logging
+import shutil
 import threading
+import socket
+import ipaddress
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 from telethon import TelegramClient, events, Button
 
 # ================= CONFIGURATION =================
+# INAYOS: Ibinalik sa tamang Env Variable Keys at ginawang default values ang iyong mga credentials
 API_ID = int(os.environ.get("API_ID", 36920878))
 API_HASH = os.environ.get("API_HASH", "3a0d6aed31669861d23f96375258e723")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk")
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", -1004303490907))
 
-# FIXED: Direct GIPHY media CDN path na ipinadala mo para sa iyong animated "COSMO" logo
-WELCOME_STICKER = "https://media1.giphy.com/media/v1.Y2lkPTZjMDliOTUyM2c1d2x6Znc1bGhhN282Ym4zajFlM3RwZXg0dTBybTFsZTgxdGd2diZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9dHM/ZvUjM1sdqiGrkzI6f0/giphy.gif"
-
-# PROXY SETUP: Dito babasahin ang proxy server mula sa iyong Render Env settings
+PORT = int(os.environ.get("PORT", "10000"))
 PROXY_SERVER = os.environ.get("PROXY_SERVER", "")
+MAX_BYTES = 20 * 1024 * 1024
 # =================================================
 
-# --- LIGHTWEIGHT WEB SERVER FOR RENDER HEALTH CHECKS ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is alive and running smoothly.")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("cosmo_bot")
 
-    def log_message(self, format, *args):
-        return  
-
-def run_health_server():
-    try:
-        port = int(os.environ.get("PORT", 10000))
-        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        print(f"Health check web server active on port {port}...")
-        server.serve_forever()
-    except Exception as e:
-        print(f"Web server exception caught: {e}")
-# --------------------------------------------------------
-
+# Setup global loop configuration para sa Render
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-bot = TelegramClient('site_dumper_bot', API_ID, API_HASH, loop=loop)
+bot = TelegramClient("site_dumper_bot", API_ID, API_HASH, loop=loop)
 
 user_states = {}
 
+# ================= HEALTH CHECK SERVER =================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path not in ("/", "/health"):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot service is running.")
+
+    def log_message(self, fmt, *args):
+        pass
+
+def run_health_server():
+    try:
+        server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
+        logger.info("Health server listening on port %s", PORT)
+        server.serve_forever()
+    except Exception:
+        logger.exception("Health server failed")
+
+# ================= HELPERS =================
 def get_dir_size(path):
-    total_size = 0
-    if os.path.exists(path):
-        for dirpath, dirnames, filenames in os.walk(path):
-            for f in filenames:
-                fp = os.path.join(dirpath, f)
-                if os.path.exists(fp):
-                    total_size += os.path.getsize(fp)
-    return total_size
+    total = 0
+    if not os.path.isdir(path):
+        return total
+    for root, _, files in os.walk(path):
+        for filename in files:
+            filepath = os.path.join(root, filename)
+            try:
+                total += os.path.getsize(filepath)
+            except OSError:
+                pass
+    return total
 
-async def size_guard(folder_name, process):
-    MAX_BYTES = 20971520 
-    while True:
-        await asyncio.sleep(2)
-        if process.returncode is not None:
-            break
-        if os.path.exists(folder_name):
-            if get_dir_size(folder_name) >= MAX_BYTES:
-                try:
-                    process.terminate()  
-                except Exception:
-                    pass
-                break
+async def send_log(message):
+    if not LOG_CHANNEL:
+        return
+    try:
+        await bot.send_message(LOG_CHANNEL, message)
+    except Exception:
+        logger.exception("Could not send log to Telegram channel")
 
-@bot.on(events.NewMessage(pattern='/start'))
+# ================= START COMMAND =================
+@bot.on(events.NewMessage(pattern=r"^/start(?:@\w+)?$"))
 async def start_handler(event):
     sender = await event.get_sender()
-    first_name = sender.first_name if sender.first_name else "User"
-    
-    try:
-        await bot.send_file(event.chat_id, WELCOME_STICKER)
-    except Exception as e:
-        print(f"Failed to dispatch sticker asset item: {e}")
+    first_name = getattr(sender, "first_name", None) or "User"
 
-    welcome_text = (
-        f"Welcome, {first_name}.\n\n"
-        "Please select an option below to interact with the system or contact support if you encounter any system errors."
-    )
-    
     buttons = [
-        [Button.inline("Dump Website", data="menu_dump")],
-        [Button.inline("View Owner / Support", data="menu_owner")]
+        [Button.inline("Dump Website", data=b"menu_dump")],
+        [Button.inline("View Owner / Support", data=b"menu_owner")],
     ]
-    await event.respond(welcome_text, buttons=buttons)
-    raise events.StopPropagation
 
+    await event.respond(
+        f"Welcome, {first_name}!\n\nSelect an option below.",
+        buttons=buttons,
+    )
+
+# ================= BUTTON HANDLERS =================
 @bot.on(events.CallbackQuery)
 async def callback_handler(event):
-    data = event.data.decode('utf-8')
+    data = event.data
     user_id = event.sender_id
 
-    if data == "menu_owner":
+    if data == b"menu_owner":
+        await event.answer()
         await event.edit(
             "System Support & Owner Information\n\n"
-            "If you have encountered an operational error, please contact the system.\n"
             "Administrator: @cosmo64bit\n\n"
-            "Use /start to return to the main menu."
+            "Send /start to return to the main menu."
         )
-        raise events.StopPropagation
-
-    elif data == "menu_dump":
+    elif data == b"menu_dump":
+        await event.answer()
         user_states[user_id] = "WAITING_FOR_URL"
-        await event.edit("Please send the website link you want to dump:\n(Supports http, https, and deep subfolders)")
-        raise events.StopPropagation
+        await event.edit(
+            "Send the URL of a website you want to archive.\n\n"
+            "Example: https://example.com"
+        )
+    else:
+        await event.answer("Unknown option.", alert=True)
 
+# ================= MESSAGE HANDLER (IDINAGDAG) =================
+# Kakalapin nito ang text input ng user kapag naghihintay ang bot ng URL link
 @bot.on(events.NewMessage)
 async def message_handler(event):
     user_id = event.sender_id
-    sender = await event.get_sender()
-    username = f"@{sender.username}" if sender.username else "No Username"
-    first_name = sender.first_name if sender.first_name else "User"
-    
-    if event.text.startswith('/start'):
+    text = event.text.strip() if event.text else ""
+
+    if text.startswith('/start'):
         return
 
     if user_id in user_states and user_states[user_id] == "WAITING_FOR_URL":
-        url = event.text.strip()
-        del user_states[user_id]
+        url = text
+        del user_states[user_id] # Burahin agad ang state para iwas loop/spam
 
         if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
             await event.respond("Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again.")
             return
 
-        status_msg = await event.respond(
-            "Dumping please wait...\n\n"
-            "Go scroll on tiktok this take time it depends on website file the bot is scraping the front&backend file."
-        )
-        
-        channel_log = (
-            "New Website Dump Request\n\n"
-            f"User ID: {user_id}\n"
-            f"Name: {first_name}\n"
-            f"Username: {username}\n"
-            f"Target URL: {url}"
-        )
-        
-        if bot.is_connected():
-            try:
-                await bot.send_message(LOG_CHANNEL, channel_log)
-            except Exception as log_error:
-                print(f"Failed to send log to channel. Error: {log_error}")
-        
-        folder_name = f"dump_{user_id}"
-        zip_name = f"dump_{user_id}.zip"
+        # Ipasa sa download function ang event at detalye
+        await download_website(event, url, user_id)
+
+# ================= WEBSITE DOWNLOAD =================
+async def download_website(event, url, user_id):
+    folder_name = f"dump_{user_id}"
+    zip_name = f"dump_{user_id}.zip"
+    status_msg = None
+
+    try:
+        wget_path = shutil.which("wget")
+        if not wget_path:
+            await event.respond("Download failed: wget is not installed. Check your Render Environment.")
+            return
+
+        status_msg = await event.respond("Download started. Please wait...")
+
+        # I-verify kung valid at public IP ang host destination
+        hostname = urlparse(url).hostname
+        try:
+            addresses = await asyncio.get_running_loop().getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+            for address in addresses:
+                ip = ipaddress.ip_address(address[4][0])
+                if not ip.is_global:
+                    await status_msg.edit("Download rejected: the website resolves to a non-public IP address.")
+                    return
+        except Exception:
+            await status_msg.edit("Invalid domain name or cannot resolve host address.")
+            return
 
         if os.path.exists(folder_name): shutil.rmtree(folder_name)
         if os.path.exists(zip_name): os.remove(zip_name)
-        
         os.makedirs(folder_name, exist_ok=True)
 
-        wget_command = [
-            "wget",
+        command = [
+            wget_path,
             "--recursive",
             "--level=3",
             "--page-requisites",
             "--adjust-extension",
             "--convert-links",
-            "--span-hosts=off",
             "--no-parent",
             "--wait=2",
             "--random-wait",
             "--limit-rate=120k",
-            "--quota=20m",  
-            "--header=Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "--header=Accept-Language: en-US,en;q=0.5",
-            f"--header=Referer: {url}",
-            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit=605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-            "--execute", "robots=off",
-            "-P", folder_name
+            "--quota=20m",
+            "--timeout=20",
+            "--tries=2",
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+            "-P", folder_name,
+            url,
         ]
 
-        env_vars = os.environ.copy()
+        env = os.environ.copy()
         if PROXY_SERVER:
-            wget_command.extend(["--proxy=on"])
-            env_vars["http_proxy"] = PROXY_SERVER
-            env_vars["https_proxy"] = PROXY_SERVER
+            env["http_proxy"] = PROXY_SERVER
+            env["https_proxy"] = PROXY_SERVER
 
-        wget_command.append(url)
+        await send_log(f"Website archive request\nUser ID: {user_id}\nTarget: {url}")
+
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *wget_command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env_vars
-            )
-
-            guard_task = asyncio.create_task(size_guard(folder_name, process))
+            # Subaybayan ang size habang nagda-download (Size Guard)
+            while process.returncode is None:
+                await asyncio.sleep(2)
+                if get_dir_size(folder_name) > MAX_BYTES:
+                    process.terminate()
+                    await status_msg.edit("⚠️ Download stopped: 20 MB size limit was reached.")
+                    break
             
-            await process.wait()
-            guard_task.cancel()  
+            _, stderr_data = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            await status_msg.edit("Download timed out after 5 minutes.")
+            return
 
-            if not bot.is_connected():
-                await bot.connect()
+        size = get_dir_size(folder_name)
+        if size == 0 or not os.listdir(folder_name):
+            await status_msg.edit("No files were downloaded. Check the URL or connection.")
+            return
 
-            final_size = get_dir_size(folder_name)
+        shutil.make_archive(f"dump_{user_id}", "zip", root_dir=folder_name)
 
-            if os.path.exists(folder_name) and os.listdir(folder_name):
-                if final_size >= 20971520:
-                    try:
-                        await status_msg.edit("⚠️ **Scraping Paused:** The size limit reached the **20MB max size safety threshold**. Compiling what was collected so far...")
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        await status_msg.edit("Dump complete. Compiling source files to ZIP package format...")
-                    except Exception:
-                        pass
-                
-                shutil.make_archive(f"dump_{user_id}", 'zip', folder_name)
-                full_zip_path = f"dump_{user_id}.zip"
+        if not os.path.isfile(zip_name):
+            await status_msg.edit("Could not create the ZIP archive.")
+            return
 
-                caption_text = f"Website Dump Successful.\n\nTarget Link: {url}"
-                await bot.send_file(event.chat_id, full_zip_path, caption=caption_text)
-                
-                try:
-                    await bot.send_file(LOG_CHANNEL, full_zip_path, caption=f"Archive file backup compiled for: {url}")
-                except Exception as file_log_error:
-                    print(f"Failed to send archive to channel: {file_log_error}")
+        await event.respond(file=zip_name, message=f"Website archive created.\nTarget: {url}")
+        await send_log(f"Website archive completed\nUser ID: {user_id}\nTarget: {url}\nSize: {os.path.getsize(zip_name)} bytes")
+        await status_msg.delete()
 
-                if os.path.exists(full_zip_path):
-                    os.remove(full_zip_path)
-                
-                try:
-                    await status_msg.delete()
-                except Exception:
-                    pass
-            else:
-                try:
-                    await status_msg.edit("Dump failed. No assets collected. The domain may be offline, protected, or proxy connection dropped.")
-                except Exception:
-                    await event.respond("Dump failed. No assets collected. The domain may be offline, protected, or proxy connection dropped.")
+    except Exception as e:
+        logger.exception("Website archive operation failed")
+        if status_msg:
+            await status_msg.edit(f"An error occurred: {str(e)}")
+    finally:
+        if os.path.exists(folder_name): shutil.rmtree(folder_name)
+        if os.path.exists(zip_name): os.remove(zip_name)
 
-        except Exception as e:
-            if not bot.is_connected():
-                await bot.connect()
-            try:
-                await status_msg.edit(f"An unexpected error occurred during processing.\nError Details: {str(e)}")
-            except Exception:
-                await event.respond(f"An unexpected error occurred during processing.\nError Details: {str(e)}")
-        
-        if os.path.exists(folder_name):
-            shutil.rmtree(folder_name)
-    
-    raise events.StopPropagation
-
+# ================= POLLING MANAGEMENT =================
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("System running in professional mode with correct global loop assignment protocols...")
+    logger.info("Bot successfully linked to core service loop.")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
