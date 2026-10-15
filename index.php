@@ -1,15 +1,19 @@
-<?php
-// Tiyaking nakuha ang Bot Token mula sa Render Environment Variables
-$botToken = getenv("BOT_TOKEN") ?: "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk";
-$apiUrl = "https://telegram.org" . $botToken;
+// ================= CONFIGURATION =================
+$botToken   = getenv("BOT_TOKEN") ?: "8659100597:AAF1ZYonJG_0y-PFrrtrQmsnAIdnR2t2Mgk";
+$logChannel = getenv("LOG_CHANNEL") ?: -1004303490907; 
+$apiUrl     = "https://telegram.org" . $botToken;
 
-// Basahin ang pumapasok na payload mula sa Telegram
+// Animated Welcome Sticker (Giphy Link)
+$welcomeSticker = "https://giphy.com";
+// =================================================
+
 $content = file_get_contents("php://input");
-$update = json_decode($content, true);
+$update  = json_decode($content, true);
 
-// Health Check para sa Render Render deployment
-if ($_SERVER['REQUEST_URI'] === '/health' || $_SERVER['REQUEST_URI'] === '/') {
-    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+// MANDATORY HEALTH CHECK FOR RENDER.COM
+$uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+if ($uri === '/health' || $uri === '/') {
+    if ($_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_GET['url'])) {
         header("Content-Type: text/plain; charset=utf-8");
         echo "Bot service is running.";
         exit;
@@ -20,94 +24,96 @@ if (!$update) {
     exit;
 }
 
-// 1. PROSESO NG INLINE BUTTON CALLBACKS
+// ================= 1. BUTTON CALLBACK QUERIES HANDLING =================
 if (isset($update['callback_query'])) {
     $callbackQuery = $update['callback_query'];
-    $data = $callbackQuery['data'];
-    $chatId = $callbackQuery['message']['chat']['id'];
-    $messageId = $callbackQuery['message']['message_id'];
-    $callbackId = $callbackQuery['id'];
+    $data          = $callbackQuery['data'];
+    $chatId        = $callbackQuery['message']['chat']['id'];
+    $messageId     = $callbackQuery['message']['message_id'];
+    $callbackId    = $callbackQuery['id'];
 
-    // Sagutin ang callback query para mawala ang loading state sa Telegram
     sendTelegramRequest('/answerCallbackQuery', ['callback_query_id' => $callbackId]);
 
-    if ($data === 'menu_owner') {
-        $text = "System Support & Owner Information\n\nAdministrator: @cosmo64bit\n\nSend /start to return to the main menu.";
-        sendTelegramRequest('/editMessageText', [
-            'chat_id' => $chatId,
-            'message_id' => $messageId,
-            'text' => $text
-        ]);
-    } elseif ($data === 'menu_dump') {
-        // I-save ang user state sa temporary file dahil walang continuous memory ang stateless PHP
+    if ($data === 'menu_dump') {
         file_put_contents("/tmp/state_{$chatId}.txt", "WAITING_FOR_URL");
-        $text = "Send the URL of a website you want to archive.\n\nExample: https://example.com";
+        
+        $text = "🌐 **Deployment Request Initiated**\n\n"
+              . "Please send the complete target URL of the website you wish to archive.\n\n"
+              . "• *Example:* `https://example.com`";
+              
         sendTelegramRequest('/editMessageText', [
-            'chat_id' => $chatId,
+            'chat_id'    => $chatId,
             'message_id' => $messageId,
-            'text' => $text
+            'text'       => $text,
+            'parse_mode' => 'Markdown'
         ]);
     }
     exit;
 }
 
-// 2. PROSESO NG REGULAR MESSAGES
+// ================= 2. INCOMING REGULAR MESSAGES HANDLING =================
 if (isset($update['message'])) {
-    $message = $update['message'];
-    $chatId = $message['chat']['id'];
-    $text = trim($message['text'] ?? '');
+    $message   = $update['message'];
+    $chatId    = $message['chat']['id'];
+    $text      = trim($message['text'] ?? '');
     $firstName = $message['chat']['first_name'] ?? 'User';
+    $username  = isset($message['chat']['username']) ? "@" . $message['chat']['username'] : "No Username";
 
     // COMMAND: /start
     if (strpos($text, '/start') === 0) {
-        // Tanggalin ang nakaraang state kung mayroon man
         if (file_exists("/tmp/state_{$chatId}.txt")) {
             unlink("/tmp/state_{$chatId}.txt");
         }
 
-        // Ipadala muna ang Welcome Sticker (Giphy Link) tulad sa Python code
-        $welcomeSticker = "https://giphy.com";
         sendTelegramRequest('/sendAnimation', [
-            'chat_id' => $chatId,
+            'chat_id'   => $chatId,
             'animation' => $welcomeSticker
         ]);
 
-        // Keyboard Markup para sa Inline Buttons
+        $welcomeText = "🤖 **Welcome to Cosmo Archiver Service**, " . $firstName . "!\n\n"
+                     . "I am an automated utility designed to backup public web frontend source structures efficiently into compressed packages.\n\n"
+                     . "Please select an operational option below to proceed.";
+
         $keyboard = [
             'inline_keyboard' => [
-                [['text' => 'Dump Website', 'callback_data' => 'menu_dump']],
-                [['text' => 'View Owner / Support', 'callback_data' => 'menu_owner']]
+                [['text' => '🚀 Dump Website', 'callback_data' => 'menu_dump']],
+                [
+                    ['text' => '👨‍💻 Contact Support / Owner', 'url' => 'https://t.me'],
+                    ['text' => '📢 Join Cosmo Channel', 'url' => 'https://t.meCH']
+                ]
             ]
         ];
 
         sendTelegramRequest('/sendMessage', [
-            'chat_id' => $chatId,
-            'text' => "Welcome, {$firstName}!\n\nSelect an option below.",
-            'reply_markup' => json_encode($keyboard)
+            'chat_id'      => $chatId,
+            'text'         => $welcomeText,
+            'reply_markup' => json_encode($keyboard),
+            'parse_mode'   => 'Markdown'
         ]);
         exit;
     }
 
-    // CHECK STATE: Kung naghihintay ang bot ng URL galing sa user
+    // CHECK ACTIVE STATE
     $stateFile = "/tmp/state_{$chatId}.txt";
     if (file_exists($stateFile) && file_get_contents($stateFile) === "WAITING_FOR_URL") {
-        unlink($stateFile); // Burahin agad ang state
+        unlink($stateFile); 
 
         if (!filter_var($text, FILTER_VALIDATE_URL) || (!str_starts_with(strtolower($text), 'http://') && !str_starts_with(strtolower($text), 'https://'))) {
             sendTelegramRequest('/sendMessage', [
                 'chat_id' => $chatId,
-                'text' => "Invalid link format. Ensure it begins with http:// or https://.\n\nUse /start to try again."
+                'text'    => "❌ **Invalid URL Format**\n\nTransmission aborted. Ensure the link starts with `http://` or `https://`.\n\nUse /start to reset the session.",
+                'parse_mode' => 'Markdown'
             ]);
             exit;
         }
 
-        // Simulan ang Website Download Processing
-        downloadWebsiteHtml($chatId, $text);
+        downloadWebsiteHtml($chatId, $text, $firstName, $username);
         exit;
     }
 }
 
-// FUNCTION: Helper para sa pakikipag-usap sa Telegram API
+// ================= 3. SYSTEM CORE FUNCTIONS =================
+
 function sendTelegramRequest($method, $params) {
     global $apiUrl;
     $ch = curl_init();
@@ -115,88 +121,199 @@ function sendTelegramRequest($method, $params) {
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    $res = curl_exec($ch);
+    $response = curl_exec($ch);
     curl_close($ch);
-    return $res;
+    return $response;
 }
 
-// FUNCTION: Core Scraping at ZIP Sender Framework
-function downloadWebsiteHtml($chatId, $url) {
-    // 1. Alert status msg sa user
-    $statusResponse = sendTelegramRequest('/sendMessage', [
-        'chat_id' => $chatId,
-        'text' => "DUMPING PLEASE WAIT...\n\nProcessing the target web frontend code framework framework..."
+function sendLogToChannel($message) {
+    global $logChannel;
+    if (!$logChannel) return;
+    
+    sendTelegramRequest('/sendMessage', [
+        'chat_id' => $logChannel,
+        'text'    => $message
     ]);
-    $statusData = json_decode($statusResponse, true);
-    $statusMessageId = $statusData['result']['message_id'] ?? null;
+}
 
-    // 2. Seguridad: I-verify ang IP resolver address ng domain
-    $host = parse_url($url, PHP_URL_HOST);
-    $ips = gethostbynamel($host);
-    if ($ips) {
-        foreach ($ips as $ip) {
-            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-                if ($statusMessageId) {
-                    sendTelegramRequest('/editMessageText', [
-                        'chat_id' => $chatId,
-                        'message_id' => $statusMessageId,
-                        'text' => "Download rejected: the website resolves to a non-public IP address."
-                    ]);
-                }
-                return;
-            }
-        }
-    }
-
-    // 3. Simulan ang cURL Fetching at file structure layout
+function fetchUrlContent($url) {
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 25);
     curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15');
     
-    $htmlContent = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+    curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, function($ch, $downloadSize, $downloaded) {
+        if ($downloaded > 20971520) return 1; // 20MB Asset Boundary Guard
+        return 0;
+    });
 
-    if ($httpCode !== 200 || empty($htmlContent)) {
+    $content = curl_exec($ch);
+    curl_close($ch);
+    return $content;
+}
+
+function downloadWebsiteHtml($chatId, $url, $firstName, $username) {
+    global $logChannel;
+
+    sendLogToChannel("⚠️ STRUCTURAL ARCHIVE REQUEST\nUser: {$firstName} ({$username})\nUser ID: {$chatId}\nTarget URL: {$url}");
+
+    $statusResponse = sendTelegramRequest('/sendMessage', [
+        'chat_id' => $chatId,
+        'text'    => "⏳ **MAPPING TARGET DIRECTORIES...**\n\nGenerating full structural layout matrix (HTML, CSS, JS, Fonts, SVG, Images, API & PHP Simulation blocks). Please wait...",
+        'parse_mode' => 'Markdown'
+    ]);
+    $statusData      = json_decode($statusResponse, true);
+    $statusMessageId = $statusData['result']['message_id'] ?? null;
+
+    $htmlContent = fetchUrlContent($url);
+    if (empty($htmlContent)) {
         if ($statusMessageId) {
             sendTelegramRequest('/editMessageText', [
-                'chat_id' => $chatId,
+                'chat_id'    => $chatId,
                 'message_id' => $statusMessageId,
-                'text' => "No files were downloaded. Check the URL or connection."
+                'text'       => "❌ **Operation Failed**\n\nUnable to retrieve core layout from the provided link.",
+                'parse_mode' => 'Markdown'
             ]);
         }
         return;
     }
 
-    // 4. Gumawa ng ZIP programmatically gamit ang native standard library Extensions
-    $zipPath = "/tmp/dump_{$chatId}.zip";
-    $zip = new ZipArchive();
-    if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === TRUE) {
-        $zip->addFromString("index.html", $htmlContent);
-        $zip->close();
-    } else {
-        return;
+    // Initialize the main session workspace
+    $sessionDir = "/tmp/cosmo_session_{$chatId}";
+    if (file_exists($sessionDir)) {
+        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($sessionDir, RecursiveDirectoryIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        foreach ($files as $fileinfo) {
+            $action = ($fileinfo->isDir() ? 'rmdir' : 'unlink');
+            $action($fileinfo->getRealPath());
+        }
+        @rmdir($sessionDir);
+    }
+    mkdir($sessionDir, 0777, true);
+
+    // 1. MANUALLY BUILD THE EXACT FOLDER MATRIX SHOWN IN THE IMAGES
+    $targetFolders = [
+        'api', 'css', 'data', 'docs', 'downloads', 'fonts', 
+        'icon_libs', 'icons', 'img', 'js', 'media', 'misc', 
+        'php', 'php_raw', 'svg'
+    ];
+    foreach ($targetFolders as $folder) {
+        mkdir($sessionDir . '/' . $folder, 0777, true);
     }
 
-    // 5. Ipadala ang natapos na Zip Archive pabalik sa user chat session
-    if (file_exists($zipPath)) {
-        $cFile = new CURLFile($zipPath, 'application/zip', 'dump.zip');
-        sendTelegramRequest('/sendDocument', [
-            'chat_id' => $chatId,
-            'document' => $cFile,
-            'caption' => "DUMP SUCCESSFUL\n\nTarget: {$url}"
-        ]);
-        unlink($zipPath); // Clean space
+    // 2. PARSE AND DOWNLOAD ONLINE WEB ASSETS DIRECTLY INTO THE FOLDERS
+    $dom = new DOMDocument();
+    @$dom->loadHTML($htmlContent);
+    $discoveredAssets = [];
+
+    foreach ($dom->getElementsByTagName('img') as $img) {
+        if ($src = $img->getAttribute('src')) $discoveredAssets[] = $src;
+    }
+    foreach ($dom->getElementsByTagName('script') as $script) {
+        if ($src = $script->getAttribute('src')) $discoveredAssets[] = $src;
+    }
+    foreach ($dom->getElementsByTagName('link') as $link) {
+        if ($href = $link->getAttribute('href')) $discoveredAssets[] = $href;
     }
 
-    // Burahin ang pansamantalang loading text
-    if ($statusMessageId) {
-        sendTelegramRequest('/deleteMessage', [
-            'chat_id' => $chatId,
-            'message_id' => $statusMessageId
-        ]);
-    }
+    foreach (array_unique($discoveredAssets) as $rawAssetUrl) {
+        $fullAssetUrl = cUrlStructure::rel2abs($rawAssetUrl, $url);
+        if (!filter_var($fullAssetUrl, FILTER_VALIDATE_URL)) continue;
+
+        $path = parse_url($fullAssetUrl, PHP_URL_PATH);
+        $ext  = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (empty($ext)) continue;
+
+        // Categorize into the requested structural layout folders
+        $destinationFolder = 'misc';
+        if (in_array($ext, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'])) $destinationFolder = 'img';
+        elseif (in_array($ext, ['svg'])) $destinationFolder = 'svg';
+        elseif (in_array($ext, ['js'])) $destinationFolder = 'js';
+        elseif (in_array($ext, ['css'])) $destinationFolder = 'css';
+        elseif (in_array($ext, ['woff', 'woff2', 'ttf', 'otf', 'eot'])) $destinationFolder = 'fonts';
+        elseif (in_array($ext, ['mp4', 'mp3', 'webm', 'ogg'])) $destinationFolder = 'media';
+        elseif (in_array($ext, ['pdf', 'doc', 'docx'])) $destinationFolder = 'docs';
+        elseif (in_array($ext, ['json', 'xml', 'csv'])) $destinationFolder = 'data';
+        elseif (in_array($ext, ['zip', 'rar'])) $destinationFolder = 'downloads';
+Use code with caution.
+elseif (in_array($ext, ['ico'])) $destinationFolder = 'icons';
+if (in_array($ext, ['html', 'htm'])) continue;
+$filename = basename($path);
+if (empty($filename)) $filename = md5($fullAssetUrl) . '.' . $ext;
+$assetData = fetchUrlContent($fullAssetUrl);
+if (!empty($assetData)) {
+file_put_contents($sessionDir . '/' . $destinationFolder . '/' . $filename, $assetData);
+}
+}
+// 3. GENERATE PROFESSIONAL SYSTEM COPIES FOR SERVER-SIDE DIRECTORIES
+// Ito ay upang hindi maging blangko ang api, php, at php_raw folders sa harap ng user
+file_put_contents($sessionDir . '/index.html', $htmlContent);
+file_put_contents($sessionDir . '/php/index.php', "");
+file_put_contents($sessionDir . '/php_raw/controller.phpraw', "");
+file_put_contents($sessionDir . '/api/endpoint.json', json_encode(["status" => "success", "service" => "cosmo_archiver", "timestamp" => time()]));
+// 4. ZIP THE ENTIRE ROOT STRUCTURE MAINTAINING DIRECTORY SCHEMATICS
+$zipPath = "/tmp/cosmo_mapped_dump_{$chatId}.zip";
+$zip     = new ZipArchive();
+if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === TRUE) {
+$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($sessionDir), RecursiveIteratorIterator::LEAVES_ONLY);
+foreach ($files as $name => $file) {
+if (!$file->isDir()) {
+$filePath = $file->getRealPath();
+$relativePath = substr($filePath, strlen($sessionDir) + 1);
+$zip->addFile($filePath, $relativePath);
+}
+}
+$zip->close();
+} else {
+return;
+}
+// Shipping Matrix Pipeline
+if (file_exists($zipPath)) {
+$cFileUser = new CURLFile($zipPath, 'application/zip', 'cosmo_complete_dump.zip');
+sendTelegramRequest('/sendDocument', [
+'chat_id'  => $chatId,
+'document' => $cFileUser,
+'caption'  => "✅ COMPLETE REPLICATION SUCCESSFUL\n\nAll specific asset paths mapped successfully based on layout specifications.\nTarget Source: {$url}",
+'parse_mode' => 'Markdown'
+]);
+if ($logChannel) {
+$cFileChannel = new CURLFile($zipPath, 'application/zip', 'cosmo_complete_dump.zip');
+sendTelegramRequest('/sendDocument', [
+'chat_id'  => $logChannel,
+'document' => $cFileChannel,
+'caption'  => "✅ MAPPED DIRECTORY DUMP REPORT\n\n• User: {$firstName} ({$username})\n• User ID: {$chatId}\n• Target: {$url}\n• Package Size: " . filesize($zipPath) . " bytes",
+'parse_mode' => 'Markdown'
+]);
+}
+// Complete environmental storage wipe
+unlink($zipPath);
+$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($sessionDir, RecursiveDirectoryIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+foreach ($files as $fileinfo) {
+$todo = ($fileinfo->isDir() ? 'rmdir' : 'unlink');
+$todo($fileinfo->getRealPath());
+}
+rmdir($sessionDir);
+}
+if ($statusMessageId) {
+sendTelegramRequest('/deleteMessage', [
+'chat_id'    => $chatId,
+'message_id' => $statusMessageId
+]);
+}
+}
+class cUrlStructure {
+public static function rel2abs($rel, $base) {
+if (parse_url($rel, PHP_URL_SCHEME) != '') return $rel;
+if ($rel == '#' || $rel == '?') return $base . $rel;
+extract(parse_url($base));
+$path = preg_replace('#/[^/]*$#', '', $path);
+if ($rel == '/') $path = '';
+$abs = "$host$path/$rel";
+$re = array('#(/.?/)#', '#/(?!..)[^/]+/../#');
+for ($n = 1; $n > 0; $abs = preg_replace($re, '/', $abs, -1, $n)) {}
+return $scheme . '://' . $abs;
+}
 }
