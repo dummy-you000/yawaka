@@ -1,21 +1,15 @@
-FROM php:8.2-apache
+FROM php:8.3-apache
 
-# Install system dependencies needed for web downloading and ZIP creation
 RUN apt-get update && apt-get install -y \
     libzip-dev \
-    zip \
-    && docker-php-ext-install zip
+    libxml2-dev \
+    && docker-php-ext-install curl dom zip \
+    && rm -rf /var/lib/apt/lists/*
 
-# Enable Apache rewrite module if your script uses routing
-RUN a2enmod rewrite
+WORKDIR /var/www/html
 
-# Change Apache's default listening port to 10000 to match Render's environment
-RUN sed -i 's/80/10000/g' /etc/apache2/sites-available/000-default.conf /etc/apache2/ports.conf
-
-# Copy your local PHP scraper files into the container
 COPY . /var/www/html/
 
-# Ensure Apache has correct permissions to write downloaded files to disk
-RUN chown -W www-data:www-data /var/www/html
+RUN chown -R www-data:www-data /var/www/html
 
-EXPOSE 10000
+CMD ["bash", "-lc", "PORT=${PORT:-10000}; sed -i \"s/^Listen 80/Listen ${PORT}/\" /etc/apache2/ports.conf; sed -i \"s/<VirtualHost \\*:80>/<VirtualHost *:${PORT}>/\" /etc/apache2/sites-available/000-default.conf; apache2-foreground"]
